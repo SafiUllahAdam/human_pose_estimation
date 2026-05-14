@@ -23,16 +23,30 @@ def eye_aspect_ratio(eye):
     # vertical eye landmarks (x, y)-coordinates
     A = dist.euclidean(eye[1], eye[5])
     B = dist.euclidean(eye[2], eye[4])
-    
+
     # compute the euclidean distance between the horizontal
     # eye landmark (x, y)-coordinates
     C = dist.euclidean(eye[0], eye[3])
-    
+
     # compute the eye aspect ratio
     ear = (A + B) / (2.0 * C)
-    
+
     # return the eye aspect ratio
     return ear
+
+def attention_risk_score(ear, mouth_distance, left_hand_off, right_hand_off):
+    score = 0.0
+
+    if ear < EYE_AR_THRESH:
+        score += ATTENTION_WEIGHTS["eyes"]
+
+    if mouth_distance > YAWN_THRESH:
+        score += ATTENTION_WEIGHTS["mouth"]
+
+    if left_hand_off or right_hand_off:
+        score += ATTENTION_WEIGHTS["hands"]
+
+    return score
 
 def alarm(msg):
     global alarm_status
@@ -61,6 +75,14 @@ alarm_status2 = False
 saying = False
 EYES_CLOSED = False
 
+ATTENTION_WEIGHTS = {
+    "eyes": 1.5,
+    "mouth": 1.3,
+    "hands": 1.2,
+}
+
+ATTENTION_ALERT_THRESH = 2.0
+
 # Define paths
 video_path = r"C:\\Users\\Chapri 007\\OneDrive\\Desktop\\Oak-D code\\Drowsiness-Detection\\SIDE_VEIWthree.mp4"
 model_path = "C:\\Users\\Chapri 007\\OneDrive\\Desktop\\Oak-D code\\Drowsiness-Detection\\Drowsiness-Detection\\best.pt"
@@ -82,6 +104,11 @@ while True:
     if not ret:
         break
 
+    left_hand_off = False
+    right_hand_off = False
+    ear = 1.0
+    distance = 0.0
+
     # Pose estimation
     results = model(source=frame, show=False, conf=0.7, save=False)
     x1, y1, x2, y2 = 251, 180, 368, 380
@@ -92,46 +119,52 @@ while True:
         img = result.orig_img
         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-        for n, i in enumerate(keypoints[0]):
-            x, y = int(i[0]), int(i[1])
-            left_wrist = keypoints[0][9]
-            right_wrist = keypoints[0][10]
+        if len(keypoints) > 0:
+            person_keypoints = keypoints[0]
+
+            for point in person_keypoints:
+                x, y = int(point[0]), int(point[1])
+                cv2.circle(img, (x, y), 1, (0, 255, 0), 2)
+
+            left_wrist = person_keypoints[9]
+            right_wrist = person_keypoints[10]
+
             lwx, lwy = int(left_wrist[0]), int(left_wrist[1])
             rwx, rwy = int(right_wrist[0]), int(right_wrist[1])
-            cv2.circle(img, (x, y), 1, (0, 255, 0), 2)
 
-            # Check if wrists are outside the rectangle
-            if n == 9 or n == 10:
-                if not (x1 < lwx < x2 and y1 < lwy < y2):
-                    print("Danger")
-                    cv2.circle(img, (lwx, lwy), 1, (0, 0, 255), 2)
-                    cv2.putText(img, "Left Wrist is not on Steering", (10, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                if not (x1 < rwx < x2 and y1 < rwy < y2):
-                    print("Danger")
-                    cv2.circle(img, (rwx, rwy), 1, (0, 0, 255), 2)
-                    cv2.putText(img, "Right Wrist is not on Steering", (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-    
+            if not (x1 < lwx < x2 and y1 < lwy < y2):
+                left_hand_off = True
+                cv2.circle(img, (lwx, lwy), 1, (0, 0, 255), 2)
+                cv2.putText(img, "Left Wrist is not on Steering", (10, 20),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
+            if not (x1 < rwx < x2 and y1 < rwy < y2):
+                right_hand_off = True
+                cv2.circle(img, (rwx, rwy), 1, (0, 0, 255), 2)
+                cv2.putText(img, "Right Wrist is not on Steering", (10, 40),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
     # Drowsiness detection
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     rects = detector(gray, 0)
-    
+
     for rect in rects:
         shape = predictor(gray, rect)
         shape = face_utils.shape_to_np(shape)
-        
+
         mouth = shape[48:68]
         leftEye = shape[42:48]
         rightEye = shape[36:42]
-        
+
         leftEAR = eye_aspect_ratio(leftEye)
         rightEAR = eye_aspect_ratio(rightEye)
-        
+
         ear = (leftEAR + rightEAR) / 2.0
-        
+
         # Yawn detection
         mouthHull = cv2.convexHull(mouth)
         distance = dist.euclidean(mouth[14], mouth[18])
-        
+
         if distance > YAWN_THRESH:
             cv2.putText(frame, "Yawn Alert", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             if alarm_status2 == False and saying == False:
@@ -141,22 +174,22 @@ while True:
                 t.start()
         else:
             alarm_status2 = False
-        
+
         # Eye status
         if ear < EYE_AR_THRESH:
             cv2.putText(frame, "Left Eye: Closed", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         else:
             cv2.putText(frame, "Left Eye: Open", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
+
         if rightEAR < EYE_AR_THRESH:
             cv2.putText(frame, "Right Eye: Closed", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         else:
             cv2.putText(frame, "Right Eye: Open", (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        
+
         cv2.putText(frame, "EAR: {:.2f}".format(ear), (300, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         cv2.putText(frame, "YAWN: {:.2f}".format(distance), (300, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         cv2.putText(frame, "Blink Counter: {}".format(BLINK_COUNTER), (250, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        
+
         # Blink detection
         if ear < EYE_AR_THRESH and rightEAR < EYE_AR_THRESH and not EYES_CLOSED:
             BLINK_COUNTER += 1
@@ -164,10 +197,19 @@ while True:
         elif ear >= EYE_AR_THRESH and rightEAR >= EYE_AR_THRESH:
             EYES_CLOSED = False
 
+    risk_score = attention_risk_score(ear, distance, left_hand_off, right_hand_off)
+
+    cv2.putText(frame, "Attention Risk: {:.2f}".format(risk_score), (250, 130),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
+    if risk_score >= ATTENTION_ALERT_THRESH:
+        cv2.putText(frame, "ATTENTION-BASED DRIVER RISK", (10, 130),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+
     cv2.imshow("Frame", frame)
     cv2.moveWindow("Frame", 450, 0)
     out.write(frame)
-    
+
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
